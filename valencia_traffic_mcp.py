@@ -69,7 +69,7 @@ async def fetch_traffic_data() -> List[Dict[str, Any]]:
         response = await client.get(url, params=params)
         response.raise_for_status()
         data = response.json()
-        return data.get("records", [])
+        return data.get("results", [])
 
 
 async def fetch_bike_stations() -> List[Dict[str, Any]]:
@@ -89,15 +89,14 @@ def process_traffic_records(records: List[Dict[str, Any]]) -> List[TrafficRecord
     processed_records = []
     
     for record in records:
-        fields = record.get("record", {}).get("fields", {})
-        segment_id = fields.get("idtramo", "Unknown")
-        name = fields.get("denominacion", "Unknown")
-        state_code = fields.get("estado", 4)  # Default to "Sin datos"
+        segment_id = record.get("idtramo", "Unknown")
+        name = record.get("denominacion", "Unknown")
+        state_code = record.get("estado", 4)  # Default to "Sin datos"
         state_name = TRAFFIC_STATE_NAMES.get(state_code, "Estado desconocido")
         
         processed_records.append(
             TrafficRecord(
-                segment_id=segment_id,
+                segment_id=str(segment_id),
                 name=name,
                 state_code=state_code,
                 state_name=state_name,
@@ -194,18 +193,34 @@ async def get_traffic_status(state_filter: Optional[List[int]] = None) -> List[s
     Returns:
         List of strings describing traffic conditions for matching segments
     """
-    records = await fetch_traffic_data()
-    processed_records = process_traffic_records(records)
+    # Para debug, intentar directamente con httpx
+    url = f"{BASE_URL}/api/explore/v2.1/catalog/datasets/estat-transit-temps-real-estado-trafico-tiempo-real/records"
+    params = {"limit": 20}
     
-    if state_filter:
-        filtered_records = [r for r in processed_records if r.state_code in state_filter]
-    else:
-        filtered_records = processed_records
-    
-    if not filtered_records:
-        return ["No traffic information matching your criteria was found."]
-    
-    return [f"Calle: {r.name}, Estado: {r.state_name}" for r in filtered_records]
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        raw_records = data.get("results", [])
+        
+        if not raw_records:
+            return ["No traffic information was found in the API response."]
+        
+        # Procesar directamente los registros
+        processed_records = []
+        for record in raw_records:
+            segment_id = record.get("idtramo", "Unknown")
+            name = record.get("denominacion", "Unknown")
+            state_code = record.get("estado", 4)  # Default to "Sin datos"
+            state_name = TRAFFIC_STATE_NAMES.get(state_code, "Estado desconocido")
+            
+            if state_filter is None or state_code in state_filter:
+                processed_records.append(f"Calle: {name}, Estado: {state_name}")
+        
+        if not processed_records:
+            return ["No traffic information matching your criteria was found."]
+        
+        return processed_records
 
 
 @mcp.tool()
