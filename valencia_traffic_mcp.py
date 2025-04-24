@@ -63,7 +63,7 @@ class BikeStation(BaseModel):
 async def fetch_traffic_data() -> List[Dict[str, Any]]:
     """Fetch traffic data from Valencia's open data API."""
     url = f"{BASE_URL}/api/explore/v2.1/catalog/datasets/estat-transit-temps-real-estado-trafico-tiempo-real/records"
-    params = {"limit": 100}  # Increased limit to get more data
+    params = {"limit": 20}  # Using suggested limit
     
     async with httpx.AsyncClient() as client:
         response = await client.get(url, params=params)
@@ -74,8 +74,8 @@ async def fetch_traffic_data() -> List[Dict[str, Any]]:
 
 async def fetch_bike_stations() -> List[Dict[str, Any]]:
     """Fetch bike station data from Valencia's open data API."""
-    url = f"{BASE_URL}/api/explore/v2.1/catalog/datasets/valenbisi-disponibilitat-valenbisi-disponibilidad/records"
-    params = {"limit": 100}  # Increased limit to get more data
+    url = f"{BASE_URL}/api/explore/v2.1/catalog/datasets/valenbisi-disponibilitat-valenbisi-dsiponibilidad/records"
+    params = {"limit": 20}  # Using suggested limit
     
     async with httpx.AsyncClient() as client:
         response = await client.get(url, params=params)
