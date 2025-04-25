@@ -1,20 +1,23 @@
 """
 Valencia Smart City MCP Server
 
-This MCP server provides access to open data from Valencia, starting with traffic information.
-It connects to the city's open data APIs and exposes the data through resources and tools.
+This MCP server provides access to open data from Valencia, including traffic information
+and air quality data. It connects to the city's open data APIs and exposes the data
+through resources and tools.
 """
 
 import asyncio
 import httpx
+import math
 from mcp.server.fastmcp import FastMCP, Context, Image
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from pydantic import BaseModel, Field
 from datetime import datetime
 
 # Create the MCP server
 mcp = FastMCP("Valencia Smart City Data", instructions="""
-This server provides access to Valencia's urban data, currently focusing on traffic information.
+This server provides access to Valencia's urban data, currently focusing on traffic information
+and air quality monitoring.
 - Use resources to access raw data snapshots
 - Use tools to query and filter specific information
 """)
@@ -35,6 +38,17 @@ TRAFFIC_STATE_NAMES = {
     8: "Paso inferior cortado",
     9: "Sin datos (paso inferior)"
 }
+
+# Air quality index mapping
+AIR_QUALITY_RATINGS = [
+    "Excelente",
+    "Buena",
+    "Razonablemente Buena",
+    "Regular",
+    "Desfavorable",
+    "Muy Desfavorable",
+    "Extremadamente Desfavorable"
+]
 
 class TrafficRecord(BaseModel):
     """Represents a traffic record for a specific road segment."""
@@ -60,6 +74,26 @@ class BikeStation(BaseModel):
     has_ticket: bool = Field(default=False, description="Whether the station has ticket functionality")
 
 
+class AirQualityStation(BaseModel):
+    """Represents an air quality monitoring station."""
+    station_id: str = Field(description="Unique identifier for the station")
+    name: str = Field(description="Name of the station")
+    address: str = Field(description="Address of the station")
+    zone_type: str = Field(description="Type of zone (Urban, Suburban, etc.)")
+    emission_type: str = Field(description="Type of emission measured (Traffic, Background, etc.)")
+    parameters: List[str] = Field(description="Parameters measured at this station")
+    quality_rating: str = Field(description="Overall air quality rating")
+    so2: Optional[float] = Field(description="Sulfur dioxide level (μg/m³)")
+    no2: Optional[float] = Field(description="Nitrogen dioxide level (μg/m³)")
+    o3: Optional[float] = Field(description="Ozone level (μg/m³)")
+    co: Optional[float] = Field(description="Carbon monoxide level (mg/m³)")
+    pm10: Optional[float] = Field(description="PM10 particulate matter level (μg/m³)")
+    pm25: Optional[float] = Field(description="PM2.5 particulate matter level (μg/m³)")
+    latitude: float = Field(description="Latitude coordinate")
+    longitude: float = Field(description="Longitude coordinate")
+    timestamp: str = Field(description="Last update timestamp")
+
+
 async def fetch_traffic_data() -> List[Dict[str, Any]]:
     """Fetch traffic data from Valencia's open data API."""
     url = f"{BASE_URL}/api/explore/v2.1/catalog/datasets/estat-transit-temps-real-estado-trafico-tiempo-real/records"
@@ -76,6 +110,18 @@ async def fetch_bike_stations() -> List[Dict[str, Any]]:
     """Fetch bike station data from Valencia's open data API."""
     url = f"{BASE_URL}/api/explore/v2.1/catalog/datasets/valenbisi-disponibilitat-valenbisi-dsiponibilidad/records"
     params = {"limit": 20}  # Using suggested limit
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        return data.get("results", [])
+
+
+async def fetch_air_quality_data() -> List[Dict[str, Any]]:
+    """Fetch air quality data from Valencia's open data API."""
+    url = f"{BASE_URL}/api/explore/v2.1/catalog/datasets/estacions-contaminacio-atmosferiques-estaciones-contaminacion-atmosfericas/records"
+    params = {"limit": 20}
     
     async with httpx.AsyncClient() as client:
         response = await client.get(url, params=params)
@@ -145,6 +191,106 @@ def process_bike_stations(records: List[Dict[str, Any]]) -> List[BikeStation]:
     return processed_stations
 
 
+def process_air_quality_stations(records: List[Dict[str, Any]]) -> List[AirQualityStation]:
+    """Process air quality station records into a more usable format."""
+    processed_stations = []
+    
+    for record in records:
+        station_id = str(record.get("objectid", "Unknown"))
+        name = record.get("nombre", "Unknown")
+        address = record.get("direccion", "Unknown")
+        zone_type = record.get("tipozona", "Unknown")
+        emission_type = record.get("tipoemisio", "Unknown")
+        quality_rating = record.get("calidad_am", "Unknown")
+        
+        # Get parameters as a list
+        parameters_str = record.get("parametros", "")
+        parameters = [p.strip() for p in parameters_str.split(",")] if parameters_str else []
+        
+        # Extract measurements
+        so2 = record.get("so2")
+        no2 = record.get("no2")
+        o3 = record.get("o3")
+        co = record.get("co")
+        pm10 = record.get("pm10")
+        pm25 = record.get("pm25")
+        
+        # Timestamp from data
+        timestamp = record.get("fecha_carg", datetime.now().isoformat())
+        
+        # Extract coordinates from geo_point_2d
+        geo_point = record.get("geo_point_2d", {})
+        latitude = geo_point.get("lat", 0.0)
+        longitude = geo_point.get("lon", 0.0)
+        
+        processed_stations.append(
+            AirQualityStation(
+                station_id=station_id,
+                name=name,
+                address=address,
+                zone_type=zone_type,
+                emission_type=emission_type,
+                parameters=parameters,
+                quality_rating=quality_rating,
+                so2=so2,
+                no2=no2,
+                o3=o3,
+                co=co,
+                pm10=pm10,
+                pm25=pm25,
+                latitude=latitude,
+                longitude=longitude,
+                timestamp=timestamp
+            )
+        )
+    
+    return processed_stations
+
+
+def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate distance between two points using Haversine formula."""
+    # Convert latitude and longitude from degrees to radians
+    lat1_rad = math.radians(lat1)
+    lon1_rad = math.radians(lon1)
+    lat2_rad = math.radians(lat2)
+    lon2_rad = math.radians(lon2)
+    
+    # Haversine formula
+    dlon = lon2_rad - lon1_rad
+    dlat = lat2_rad - lat1_rad
+    a = math.sin(dlat/2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon/2)**2
+    c = 2 * math.asin(math.sqrt(a))
+    r = 6371  # Radius of earth in kilometers
+    
+    return c * r
+
+
+def find_closest_station(stations: List[AirQualityStation], lat: float, lon: float) -> Tuple[AirQualityStation, float]:
+    """Find the closest station to a given coordinate.
+    
+    Args:
+        stations: List of AirQualityStation objects
+        lat: Latitude to search from
+        lon: Longitude to search from
+        
+    Returns:
+        Tuple of (closest station, distance in km)
+    """
+    if not stations:
+        raise ValueError("No stations provided")
+    
+    closest_station = None
+    min_distance = float('inf')
+    
+    for station in stations:
+        distance = calculate_distance(lat, lon, station.latitude, station.longitude)
+        if distance < min_distance:
+            min_distance = distance
+            closest_station = station
+    
+    return (closest_station, min_distance)
+
+
 # Resources
 
 @mcp.resource("valencia://traffic/raw")
@@ -177,7 +323,22 @@ async def get_processed_bike_station_data() -> List[Dict[str, Any]]:
     return [station.model_dump() for station in processed_stations]
 
 
-# Tools
+@mcp.resource("valencia://air-quality/raw")
+async def get_raw_air_quality_data() -> Dict[str, Any]:
+    """Get raw air quality data from Valencia's open data API."""
+    records = await fetch_air_quality_data()
+    return {"data": records, "timestamp": datetime.now().isoformat()}
+
+
+@mcp.resource("valencia://air-quality/processed")
+async def get_processed_air_quality_data() -> List[Dict[str, Any]]:
+    """Get processed air quality data with formatted fields."""
+    records = await fetch_air_quality_data()
+    processed_stations = process_air_quality_stations(records)
+    return [station.model_dump() for station in processed_stations]
+
+
+# Traffic Tools
 
 @mcp.tool()
 async def get_traffic_status(state_filter: Optional[List[int]] = None) -> List[str]:
@@ -282,6 +443,8 @@ async def search_road_segment(name_query: str) -> List[Dict[str, Any]]:
     return matching_records
 
 
+# Bike Tools
+
 @mcp.tool()
 async def find_available_bikes(min_bikes: int = 1, near_address: str = None) -> Dict[str, Any]:
     """
@@ -377,6 +540,336 @@ async def get_bike_station_status(station_id: str = None) -> Dict[str, Any]:
     return result
 
 
+# Air Quality Tools
+
+@mcp.tool()
+async def get_air_quality_summary() -> Dict[str, Any]:
+    """
+    Get a summary of current air quality conditions in Valencia.
+    
+    Returns:
+        Dictionary with air quality statistics and ratings across the city
+    """
+    records = await fetch_air_quality_data()
+    stations = process_air_quality_stations(records)
+    
+    # Count stations by air quality rating
+    quality_counts = {}
+    for rating in AIR_QUALITY_RATINGS:
+        count = sum(1 for s in stations if s.quality_rating == rating)
+        if count > 0:  # Only include ratings that have stations
+            quality_counts[rating] = count
+    
+    # Calculate average pollutant levels across all stations
+    pollutants = {
+        "so2": [],
+        "no2": [],
+        "o3": [],
+        "co": [],
+        "pm10": [],
+        "pm25": []
+    }
+    
+    for station in stations:
+        if station.so2 is not None and station.so2 > 0:
+            pollutants["so2"].append(station.so2)
+        if station.no2 is not None and station.no2 > 0:
+            pollutants["no2"].append(station.no2)
+        if station.o3 is not None and station.o3 > 0:
+            pollutants["o3"].append(station.o3)
+        if station.co is not None and station.co > 0:
+            pollutants["co"].append(station.co)
+        if station.pm10 is not None and station.pm10 > 0:
+            pollutants["pm10"].append(station.pm10)
+        if station.pm25 is not None and station.pm25 > 0:
+            pollutants["pm25"].append(station.pm25)
+    
+    # Calculate averages
+    avg_pollutants = {}
+    for key, values in pollutants.items():
+        if values:
+            avg_pollutants[key] = round(sum(values) / len(values), 2)
+        else:
+            avg_pollutants[key] = None
+    
+    # Find stations with highest pollutant levels
+    highest_no2 = max(stations, key=lambda s: s.no2 if s.no2 is not None else -1)
+    highest_pm10 = max(stations, key=lambda s: s.pm10 if s.pm10 is not None else -1)
+    highest_o3 = max(stations, key=lambda s: s.o3 if s.o3 is not None else -1)
+    
+    high_pollution_stations = []
+    for station in [highest_no2, highest_pm10, highest_o3]:
+        if not any(s["station_id"] == station.station_id for s in high_pollution_stations):
+            high_pollution_stations.append({
+                "station_id": station.station_id, 
+                "name": station.name,
+                "quality_rating": station.quality_rating,
+                "main_pollutants": {
+                    "no2": station.no2,
+                    "pm10": station.pm10,
+                    "o3": station.o3
+                }
+            })
+    
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "total_stations": len(stations),
+        "quality_distribution": quality_counts,
+        "average_pollutant_levels": avg_pollutants,
+        "highest_pollution_stations": high_pollution_stations
+    }
+
+
+@mcp.tool()
+async def find_nearest_air_station(latitude: float, longitude: float) -> Dict[str, Any]:
+    """
+    Find the air quality monitoring station nearest to specified coordinates.
+    
+    Args:
+        latitude: Latitude coordinate
+        longitude: Longitude coordinate
+    
+    Returns:
+        Dictionary with information about the nearest station, its distance, and current readings
+    """
+    records = await fetch_air_quality_data()
+    stations = process_air_quality_stations(records)
+    
+    if not stations:
+        return {"error": "No air quality stations found in the data"}
+    
+    # Find the closest station
+    closest_station, distance = find_closest_station(stations, latitude, longitude)
+    
+    if not closest_station:
+        return {"error": "Could not determine closest station"}
+    
+    # Prepare pollutant data
+    pollutants = {}
+    if closest_station.so2 is not None:
+        pollutants["so2"] = closest_station.so2
+    if closest_station.no2 is not None:
+        pollutants["no2"] = closest_station.no2
+    if closest_station.o3 is not None:
+        pollutants["o3"] = closest_station.o3
+    if closest_station.co is not None:
+        pollutants["co"] = closest_station.co
+    if closest_station.pm10 is not None and closest_station.pm10 > 0:
+        pollutants["pm10"] = closest_station.pm10
+    if closest_station.pm25 is not None and closest_station.pm25 > 0:
+        pollutants["pm25"] = closest_station.pm25
+    
+    return {
+        "station": {
+            "id": closest_station.station_id,
+            "name": closest_station.name,
+            "address": closest_station.address,
+            "zone_type": closest_station.zone_type,
+            "emission_type": closest_station.emission_type,
+            "quality_rating": closest_station.quality_rating,
+            "coordinates": {
+                "latitude": closest_station.latitude,
+                "longitude": closest_station.longitude
+            }
+        },
+        "distance_km": round(distance, 2),
+        "pollutant_levels": pollutants,
+        "timestamp": closest_station.timestamp
+    }
+
+
+@mcp.tool()
+async def get_station_data(station_name: str) -> Dict[str, Any]:
+    """
+    Get detailed data for a specific air quality monitoring station.
+    
+    Args:
+        station_name: Name of the station (case-insensitive partial match)
+    
+    Returns:
+        Dictionary with detailed information about matching stations
+    """
+    records = await fetch_air_quality_data()
+    stations = process_air_quality_stations(records)
+    
+    # Find stations matching the name (case-insensitive)
+    lower_name = station_name.lower()
+    matching_stations = [
+        s for s in stations
+        if lower_name in s.name.lower() or lower_name in s.address.lower()
+    ]
+    
+    if not matching_stations:
+        return {
+            "error": f"No stations found matching '{station_name}'",
+            "available_stations": [s.name for s in stations]
+        }
+    
+    # Convert to dict for response
+    result = {
+        "count": len(matching_stations),
+        "stations": []
+    }
+    
+    for station in matching_stations:
+        pollutants = {}
+        if station.so2 is not None:
+            pollutants["so2"] = {"value": station.so2, "unit": "μg/m³"}
+        if station.no2 is not None:
+            pollutants["no2"] = {"value": station.no2, "unit": "μg/m³"}
+        if station.o3 is not None:
+            pollutants["o3"] = {"value": station.o3, "unit": "μg/m³"}
+        if station.co is not None:
+            pollutants["co"] = {"value": station.co, "unit": "mg/m³"}
+        if station.pm10 is not None and station.pm10 > 0:
+            pollutants["pm10"] = {"value": station.pm10, "unit": "μg/m³"}
+        if station.pm25 is not None and station.pm25 > 0:
+            pollutants["pm25"] = {"value": station.pm25, "unit": "μg/m³"}
+        
+        result["stations"].append({
+            "id": station.station_id,
+            "name": station.name,
+            "address": station.address,
+            "zone_type": station.zone_type,
+            "emission_type": station.emission_type,
+            "quality_rating": station.quality_rating,
+            "parameters_measured": station.parameters,
+            "pollutant_levels": pollutants,
+            "coordinates": {
+                "latitude": station.latitude,
+                "longitude": station.longitude
+            },
+            "timestamp": station.timestamp
+        })
+    
+    return result
+
+
+@mcp.tool()
+async def get_pollutant_levels(pollutant: str) -> Dict[str, Any]:
+    """
+    Get current levels of a specific pollutant across all monitoring stations.
+    
+    Args:
+        pollutant: Type of pollutant to check (so2, no2, o3, co, pm10, pm25)
+    
+    Returns:
+        Dictionary with levels of the specified pollutant at all measuring stations
+    """
+    valid_pollutants = ["so2", "no2", "o3", "co", "pm10", "pm25"]
+    pollutant = pollutant.lower()
+    
+    if pollutant not in valid_pollutants:
+        return {
+            "error": f"Invalid pollutant. Valid options are: {', '.join(valid_pollutants)}",
+            "valid_pollutants": valid_pollutants
+        }
+    
+    records = await fetch_air_quality_data()
+    stations = process_air_quality_stations(records)
+    
+    # Find stations measuring this pollutant
+    measuring_stations = []
+    for station in stations:
+        # Get the pollutant value using getattr
+        value = getattr(station, pollutant, None)
+        if value is not None and value > 0:  # Only include stations with valid readings
+            measuring_stations.append({
+                "id": station.station_id,
+                "name": station.name,
+                "address": station.address,
+                "zone_type": station.zone_type,
+                "emission_type": station.emission_type,
+                "value": value,
+                "quality_rating": station.quality_rating,
+                "coordinates": {
+                    "latitude": station.latitude,
+                    "longitude": station.longitude
+                },
+                "timestamp": station.timestamp
+            })
+    
+    # Sort stations by pollutant level (highest first)
+    measuring_stations.sort(key=lambda s: s["value"], reverse=True)
+    
+    # Calculate statistics
+    if measuring_stations:
+        values = [s["value"] for s in measuring_stations]
+        avg_value = sum(values) / len(values)
+        max_value = max(values)
+        min_value = min(values)
+    else:
+        avg_value = max_value = min_value = 0
+    
+    result = {
+        "pollutant": pollutant,
+        "stations_measuring": len(measuring_stations),
+        "statistics": {
+            "average": round(avg_value, 2),
+            "maximum": max_value,
+            "minimum": min_value
+        },
+        "unit": "μg/m³" if pollutant != "co" else "mg/m³",
+        "stations": measuring_stations
+    }
+    
+    return result
+
+
+@mcp.tool()
+async def get_air_quality_map() -> Dict[str, Any]:
+    """
+    Get data for creating an air quality map of Valencia.
+    
+    Returns:
+        Dictionary with geospatial data for all air quality monitoring stations
+    """
+    records = await fetch_air_quality_data()
+    stations = process_air_quality_stations(records)
+    
+    # Prepare geospatial data
+    geospatial_data = []
+    for station in stations:
+        # Only include stations with valid coordinates
+        if station.latitude != 0 and station.longitude != 0:
+            pollutants = {}
+            if station.so2 is not None:
+                pollutants["so2"] = station.so2
+            if station.no2 is not None:
+                pollutants["no2"] = station.no2
+            if station.o3 is not None:
+                pollutants["o3"] = station.o3
+            if station.co is not None:
+                pollutants["co"] = station.co
+            if station.pm10 is not None and station.pm10 > 0:
+                pollutants["pm10"] = station.pm10
+            if station.pm25 is not None and station.pm25 > 0:
+                pollutants["pm25"] = station.pm25
+            
+            geospatial_data.append({
+                "id": station.station_id,
+                "name": station.name,
+                "quality_rating": station.quality_rating,
+                "pollutants": pollutants,
+                "type": station.zone_type,
+                "coordinates": {
+                    "latitude": station.latitude,
+                    "longitude": station.longitude
+                }
+            })
+    
+    result = {
+        "timestamp": datetime.now().isoformat(),
+        "center": {
+            "latitude": 39.4699,  # Valencia city center approximate coordinates
+            "longitude": -0.3763
+        },
+        "stations": geospatial_data
+    }
+    
+    return result
+
+
 # Prompts
 
 @mcp.prompt("traffic_report")
@@ -432,10 +925,35 @@ Use the get_bike_station_status tool to gather this information.
 """
 
 
+@mcp.prompt("air_quality_report")
+def air_quality_report_prompt() -> str:
+    """Create a comprehensive prompt for analyzing air quality in Valencia."""
+    return """Please create a comprehensive air quality report for Valencia based on current monitoring data. Your report should include:
+
+1. Overall air quality assessment
+   - Current air quality ratings across the city
+   - Areas with the best and worst air quality
+   - Main pollutants of concern
+
+2. Specific pollutant analysis
+   - NO2 levels (traffic-related pollution)
+   - Particulate matter (PM10 and PM2.5)
+   - Ozone levels
+   - Other notable pollutants
+
+3. Health recommendations
+   - Advice for sensitive groups (elderly, children, those with respiratory conditions)
+   - Activities that should be limited if any
+   - Best times/places for outdoor activities
+
+Use the get_air_quality_summary tool and other air quality tools to gather the necessary data.
+"""
+
+
 @mcp.prompt("urban_mobility_report")
 def urban_mobility_report_prompt() -> str:
     """Create a comprehensive prompt for analyzing urban mobility options."""
-    return """Please create a comprehensive urban mobility report for Valencia covering both traffic conditions and bike sharing availability. Your report should include:
+    return """Please create a comprehensive urban mobility report for Valencia covering traffic conditions, bike sharing availability, and air quality. Your report should include:
 
 1. Overall traffic situation in Valencia
    - Major congestion points
@@ -447,12 +965,17 @@ def urban_mobility_report_prompt() -> str:
    - Areas with high and low availability
    - Recommendations for users
 
-3. Integrated mobility recommendations
+3. Air quality considerations
+   - Current air quality levels across the city
+   - Areas with poor air quality to avoid
+   - Relationship between traffic and air pollution
+
+4. Integrated mobility recommendations
    - Suggestions for multimodal travel options
    - Key transfer points between transport modes
-   - Time-saving strategies for urban travel
+   - Time-saving and health-conscious strategies for urban travel
 
-Use the get_congestion_summary tool for traffic data and get_bike_station_status tool for bike information.
+Use the get_congestion_summary tool for traffic data, get_bike_station_status tool for bike information, and get_air_quality_summary for environmental data.
 """
 
 
