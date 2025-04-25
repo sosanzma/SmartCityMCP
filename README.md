@@ -1,13 +1,14 @@
 # Valencia Smart City MCP Server
 
-MCP server providing real-time traffic and bike-sharing data from Valencia, Spain for Claude and other LLMs.
+MCP server providing real-time traffic, bike-sharing, and air quality data from Valencia, Spain for Claude and other LLMs.
 
 ## Features
 
 - Real-time traffic conditions across Valencia
 - Valenbisi bike station availability
+- Air quality monitoring data from city stations
 - Traffic congestion analysis
-- Search capabilities for specific roads or bike stations
+- Search capabilities for specific roads, bike stations, or air quality information
 
 ## Requirements
 
@@ -30,6 +31,8 @@ pip install -r requirements.txt
 
 The server exposes these tools:
 
+### Traffic Tools
+
 - **get_traffic_status**
   - Get current traffic status for road segments
   - Input: `state_filter` (optional, integer[]) - Filter by traffic state codes
@@ -44,6 +47,8 @@ The server exposes these tools:
   - Input: `name_query` (string) - Case-insensitive search term
   - Returns: List of matching road segments with current state
 
+### Bike Sharing Tools
+
 - **find_available_bikes**
   - Find bike stations with available bikes
   - Inputs: 
@@ -56,6 +61,33 @@ The server exposes these tools:
   - Input: `station_id` (string, optional) - For specific station
   - Returns: Detailed status including bikes available and free slots
 
+### Air Quality Tools
+
+- **get_air_quality_summary**
+  - Get overview of air quality across Valencia
+  - Returns: Summary statistics of pollutant levels and air quality ratings
+
+- **find_nearest_air_station**
+  - Find closest air quality monitoring station to coordinates
+  - Inputs:
+    - `latitude` (float) - Latitude coordinate
+    - `longitude` (float) - Longitude coordinate
+  - Returns: Nearest station details with distance and current readings
+
+- **get_station_data**
+  - Get detailed information about air quality monitoring stations
+  - Input: `station_name` (string) - Name to search for (partial match)
+  - Returns: Detailed pollutant data for matching stations
+
+- **get_pollutant_levels**
+  - Get levels of a specific pollutant across all stations
+  - Input: `pollutant` (string) - Pollutant type (so2, no2, o3, co, pm10, pm25)
+  - Returns: Measurements of specified pollutant with statistics
+
+- **get_air_quality_map**
+  - Get geospatial data of air quality stations for mapping
+  - Returns: Location data with quality ratings and pollutant levels
+
 ## Claude Desktop Integration
 
 Add this to your `claude_desktop_config.json` (typically found in `%APPDATA%\Claude` on Windows or `~/Library/Application Support/Claude` on macOS):
@@ -63,7 +95,7 @@ Add this to your `claude_desktop_config.json` (typically found in `%APPDATA%\Cla
 ```json
 {
   "mcpServers": {
-    "valenciaTraffic": {
+    "valenciaSmartCity": {
       "command": "uv",
       "args": ["run", "valencia_traffic_mcp.py"]
     }
@@ -74,7 +106,7 @@ Add this to your `claude_desktop_config.json` (typically found in `%APPDATA%\Cla
 Alternatively, install directly with:
 
 ```bash
-mcp install valencia_traffic_mcp.py --name "Valencia Traffic"
+mcp install valencia_traffic_mcp.py --name "Valencia Smart City"
 ```
 
 ## Development
@@ -89,26 +121,22 @@ mcp dev valencia_traffic_mcp.py
 python valencia_traffic_mcp.py
 ```
 
-## Traffic State Codes
-
-| Code | Description |
-|------|-------------|
-| 0 | Fluido (Flowing) |
-| 1 | Denso (Dense) |
-| 2 | Congestionado (Congested) |
-| 3 | Cortado (Closed) |
-| 4 | Sin datos (No data) |
-
 ## Example Queries
 
 - "How's the traffic in Valencia right now?"
 - "Are there any congested streets in downtown Valencia?"
 - "Where can I find a Valenbisi bike near the City Hall?"
-- "Show me a summary of the current traffic conditions"
+- "What's the air quality like in Valencia today?"
+- "Which areas of Valencia have the highest pollution levels?"
+- "What's the nearest air quality monitoring station to the train station?"
+- "Show me the NO2 levels across Valencia"
 
-## Data Source
+## Data Sources
 
-This server connects to [Valencia's open data platform](https://valencia.opendatasoft.com).
+This server connects to [Valencia's open data platform](https://valencia.opendatasoft.com) and uses these datasets:
+- Traffic data: `estat-transit-temps-real-estado-trafico-tiempo-real`
+- Bike stations: `valenbisi-disponibilitat-valenbisi-disponibilidad`
+- Air quality: `estacions-contaminacio-atmosferiques-estaciones-contaminacion-atmosfericas`
 
 ## License
 
