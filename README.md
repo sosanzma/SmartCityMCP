@@ -1,96 +1,115 @@
 # Valencia Smart City MCP Server
 
-This Model Context Protocol (MCP) server provides access to open data from Valencia, currently focusing on real-time traffic information.
+MCP server providing real-time traffic and bike-sharing data from Valencia, Spain for Claude and other LLMs.
 
 ## Features
 
-- **Real-time traffic data**: Access current traffic conditions across Valencia
-- **Bike sharing availability**: Access real-time Valenbisi bike station status
-- **Processed data**: Get human-readable traffic and bike station information
-- **Search capabilities**: Find specific road segments or bike stations
-- **Congestion analysis**: Get summaries of traffic congestion across the city
-- **Bike availability tools**: Find stations with available bikes near specific locations
+- Real-time traffic conditions across Valencia
+- Valenbisi bike station availability
+- Traffic congestion analysis
+- Search capabilities for specific roads or bike stations
+
+## Requirements
+
+- Python 3.10+
+- Claude Desktop or other MCP-compatible client
+- Internet connection
 
 ## Installation
 
-1. Install the required dependencies:
-
 ```bash
+# Clone the repository
+git clone https://github.com/yourusername/SmartCityMCP.git
+cd SmartCityMCP
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-## Usage
+## Tools
 
-### Running the Server
+The server exposes these tools:
 
-You can run the server directly:
+- **get_traffic_status**
+  - Get current traffic status for road segments
+  - Input: `state_filter` (optional, integer[]) - Filter by traffic state codes
+  - Returns: List of road segments with their traffic states
 
-```bash
-python valencia_traffic_mcp.py
+- **get_congestion_summary**
+  - Get summary of current traffic congestion in Valencia
+  - Returns: Statistics including congested segments and percentages
+
+- **search_road_segment**
+  - Search for specific road segments by name
+  - Input: `name_query` (string) - Case-insensitive search term
+  - Returns: List of matching road segments with current state
+
+- **find_available_bikes**
+  - Find bike stations with available bikes
+  - Inputs: 
+    - `min_bikes` (integer, default: 1) - Minimum number required
+    - `near_address` (string, optional) - Address to search near
+  - Returns: List of stations matching criteria with availability info
+
+- **get_bike_station_status**
+  - Get detailed status of bike stations
+  - Input: `station_id` (string, optional) - For specific station
+  - Returns: Detailed status including bikes available and free slots
+
+## Claude Desktop Integration
+
+Add this to your `claude_desktop_config.json` (typically found in `%APPDATA%\Claude` on Windows or `~/Library/Application Support/Claude` on macOS):
+
+```json
+{
+  "mcpServers": {
+    "valenciaTraffic": {
+      "command": "uv",
+      "args": ["run", "valencia_traffic_mcp.py"]
+    }
+  }
+}
 ```
 
-Or use the MCP CLI for development and testing:
+Alternatively, install directly with:
 
 ```bash
-# For development with MCP Inspector
+mcp install valencia_traffic_mcp.py --name "Valencia Traffic"
+```
+
+## Development
+
+Run the server directly:
+
+```bash
+# Run with MCP Inspector for development
 mcp dev valencia_traffic_mcp.py
 
-# For integration with Claude Desktop
-mcp install valencia_traffic_mcp.py
+# Run directly (stdio transport)
+python valencia_traffic_mcp.py
 ```
-
-### Available Resources
-
-- `valencia://traffic/raw` - Raw traffic data from Valencia's API
-- `valencia://traffic/processed` - Processed traffic data with human-readable state information
-- `valencia://bikes/raw` - Raw bike station data from Valencia's API
-- `valencia://bikes/processed` - Processed bike station data with formatted fields
-
-### Available Tools
-
-- `get_traffic_status` - Get current traffic status, optionally filtered by state
-- `get_congestion_summary` - Get a summary of current traffic congestion
-- `search_road_segment` - Search for specific road segments by name
-- `find_available_bikes` - Find bike stations with available bikes, optionally near a specific address
-- `get_bike_station_status` - Get detailed status of bike stations, optionally filtered by station ID
-
-### Available Prompts
-
-- `traffic_report` - Generate a comprehensive traffic report
-- `navigation_advice` - Provide navigation advice for reaching a specific destination
-- `bike_availability` - Check bike availability near a specific location
-- `urban_mobility_report` - Create a comprehensive urban mobility report
-
-## Data Sources
-
-This MCP server connects to Valencia's open data platform at:
-https://valencia.opendatasoft.com
-
-The data is from the following datasets:
-
-- Traffic data: `estat-transit-temps-real-estado-trafico-tiempo-real`
-- Bike stations: `valenbisi-disponibilitat-valenbisi-disponibilidad`
-
-Data is updated every few minutes from official Valencia city sources.
 
 ## Traffic State Codes
 
 | Code | Description |
 |------|-------------|
-| 0 | Fluido |
-| 1 | Denso |
-| 2 | Congestionado |
-| 3 | Cortado |
-| 4 | Sin datos |
-| 5 | Paso inferior fluido |
-| 6 | Paso inferior denso |
-| 7 | Paso inferior congestionado |
-| 8 | Paso inferior cortado |
-| 9 | Sin datos (paso inferior) |
+| 0 | Fluido (Flowing) |
+| 1 | Denso (Dense) |
+| 2 | Congestionado (Congested) |
+| 3 | Cortado (Closed) |
+| 4 | Sin datos (No data) |
 
-## Future Enhancements
+## Example Queries
 
-- Add additional data sources from Valencia's open data portal
-- Implement historical data analysis
-- Add visualization capabilities for traffic patterns
-- Expand to other cities with open data portals
+- "How's the traffic in Valencia right now?"
+- "Are there any congested streets in downtown Valencia?"
+- "Where can I find a Valenbisi bike near the City Hall?"
+- "Show me a summary of the current traffic conditions"
+
+## Data Source
+
+This server connects to [Valencia's open data platform](https://valencia.opendatasoft.com).
+
+## License
+
+MIT
