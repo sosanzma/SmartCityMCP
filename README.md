@@ -10,6 +10,21 @@ MCP server providing real-time traffic, bike-sharing, and air quality data from 
 - Traffic congestion analysis
 - Search capabilities for specific roads, bike stations, or air quality information
 
+## Demo
+
+Check out a live demos of this MCP in action with Claude Desktop :
+
+Air quality:
+[Claude MCP Demo Chat Air quality](https://claude.ai/share/1425bcc9-c7bd-4b34-9568-6e16257b494b)
+
+Bike-sharing with Valenbisi : 
+[Claude MCP Demo Chat Valenbisi](https://claude.ai/share/aa53377b-e850-4977-acf3-bbc6d7833a0b)
+
+Traffic :
+[Claude MCP Demo Chat Traffic](https://claude.ai/share/f7408546-a96d-4851-95a5-a4623358b15d)
+
+This shared conversation demonstrates how Claude can access and analyze real-time Valencia urban data through the MCP.
+
 ## Requirements
 
 - Python 3.10+
