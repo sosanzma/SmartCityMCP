@@ -1,9 +1,9 @@
 """
 Valencia Smart City MCP Server
 
-This MCP server provides access to open data from Valencia, including traffic information
-and air quality data. It connects to the city's open data APIs and exposes the data
-through resources and tools.
+This MCP server provides access to open data from Valencia, including traffic information,
+air quality data, and weather information. It connects to the city's open data APIs and 
+Open-Meteo weather API to expose the data through resources and tools.
 """
 
 import asyncio
@@ -12,18 +12,23 @@ import math
 from mcp.server.fastmcp import FastMCP, Context, Image
 from typing import List, Dict, Any, Optional, Tuple
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, timedelta
+from collections import Counter
 
 # Create the MCP server
 mcp = FastMCP("Valencia Smart City Data", instructions="""
-This server provides access to Valencia's urban data, currently focusing on traffic information
-and air quality monitoring.
+This server provides access to Valencia's urban data, currently focusing on traffic information,
+air quality monitoring and weather data.
 - Use resources to access raw data snapshots
 - Use tools to query and filter specific information
 """)
 
 # Base URL for Valencia's open data API
 BASE_URL = "https://valencia.opendatasoft.com"
+
+# Coordinates for Valencia
+VALENCIA_LATITUDE = 39.47
+VALENCIA_LONGITUDE = -0.38
 
 # Traffic state names mapping
 TRAFFIC_STATE_NAMES = {
@@ -49,6 +54,38 @@ AIR_QUALITY_RATINGS = [
     "Muy Desfavorable",
     "Extremadamente Desfavorable"
 ]
+
+# Weather code mapping
+WEATHER_CODES = {
+    0: "Cielo despejado",
+    1: "Mayormente despejado",
+    2: "Parcialmente nublado",
+    3: "Nublado",
+    45: "Niebla",
+    48: "Niebla con escarcha",
+    51: "Llovizna ligera",
+    53: "Llovizna moderada",
+    55: "Llovizna densa",
+    56: "Llovizna helada ligera",
+    57: "Llovizna helada densa",
+    61: "Lluvia ligera",
+    63: "Lluvia moderada", 
+    65: "Lluvia intensa",
+    66: "Lluvia helada ligera",
+    67: "Lluvia helada intensa",
+    71: "Nevada ligera",
+    73: "Nevada moderada",
+    75: "Nevada intensa",
+    77: "Granos de nieve",
+    80: "Chubascos ligeros",
+    81: "Chubascos moderados",
+    82: "Chubascos intensos",
+    85: "Chubascos de nieve ligeros",
+    86: "Chubascos de nieve intensos",
+    95: "Tormenta",
+    96: "Tormenta con granizo ligero",
+    99: "Tormenta con granizo fuerte"
+}
 
 class TrafficRecord(BaseModel):
     """Represents a traffic record for a specific road segment."""
@@ -94,6 +131,34 @@ class AirQualityStation(BaseModel):
     timestamp: str = Field(description="Last update timestamp")
 
 
+class CurrentWeather(BaseModel):
+    """Represents current weather conditions in Valencia."""
+    temperature: float = Field(description="Current temperature in Celsius")
+    apparent_temperature: Optional[float] = Field(None, description="Apparent temperature in Celsius")
+    relative_humidity: Optional[float] = Field(None, description="Relative humidity in %")
+    wind_speed: Optional[float] = Field(None, description="Wind speed in km/h")
+    wind_direction: Optional[int] = Field(None, description="Wind direction in degrees")
+    precipitation: Optional[float] = Field(None, description="Precipitation in mm")
+    weather_code: Optional[int] = Field(None, description="Weather condition code")
+    weather_description: Optional[str] = Field(None, description="Human-readable weather description")
+    timestamp: str = Field(description="Timestamp of the weather data")
+
+
+class WeatherForecast(BaseModel):
+    """Represents a weather forecast entry for a specific time."""
+    time: str = Field(description="Forecast time")
+    temperature: float = Field(description="Forecasted temperature in Celsius")
+    apparent_temperature: Optional[float] = Field(None, description="Apparent temperature in Celsius")
+    relative_humidity: Optional[float] = Field(None, description="Forecasted relative humidity in %")
+    wind_speed: Optional[float] = Field(None, description="Forecasted wind speed in km/h")
+    wind_direction: Optional[int] = Field(None, description="Wind direction in degrees")
+    precipitation_probability: Optional[float] = Field(None, description="Probability of precipitation in %")
+    precipitation: Optional[float] = Field(None, description="Precipitation amount in mm")
+    weather_code: Optional[int] = Field(None, description="Forecasted weather condition code")
+    weather_description: Optional[str] = Field(None, description="Human-readable weather description")
+
+
+# Traffic API functions
 async def fetch_traffic_data() -> List[Dict[str, Any]]:
     """Fetch traffic data from Valencia's open data API."""
     url = f"{BASE_URL}/api/explore/v2.1/catalog/datasets/estat-transit-temps-real-estado-trafico-tiempo-real/records"
@@ -130,6 +195,56 @@ async def fetch_air_quality_data() -> List[Dict[str, Any]]:
         return data.get("results", [])
 
 
+# Weather API functions
+async def fetch_current_weather() -> Dict[str, Any]:
+    """Fetch current weather data for Valencia from Open-Meteo API."""
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": VALENCIA_LATITUDE,
+        "longitude": VALENCIA_LONGITUDE,
+        "current": "temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,wind_direction_10m,precipitation,weather_code"
+    }
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+async def fetch_weather_forecast(days: int = 3) -> Dict[str, Any]:
+    """Fetch weather forecast data for Valencia from Open-Meteo API."""
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": VALENCIA_LATITUDE,
+        "longitude": VALENCIA_LONGITUDE,
+        "hourly": "temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,wind_direction_10m,precipitation_probability,precipitation,weather_code",
+        "forecast_days": min(7, max(1, days))  # Limit between 1-7 days
+    }
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+async def fetch_historical_weather(start_date: str, end_date: str) -> Dict[str, Any]:
+    """Fetch historical weather data for Valencia from Open-Meteo API."""
+    url = "https://archive-api.open-meteo.com/v1/era5"
+    params = {
+        "latitude": VALENCIA_LATITUDE,
+        "longitude": VALENCIA_LONGITUDE,
+        "start_date": start_date,
+        "end_date": end_date,
+        "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m,precipitation"
+    }
+    
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        return response.json()
+
+
+# Processors
 def process_traffic_records(records: List[Dict[str, Any]]) -> List[TrafficRecord]:
     """Process traffic records into a more usable format."""
     processed_records = []
@@ -247,6 +362,58 @@ def process_air_quality_stations(records: List[Dict[str, Any]]) -> List[AirQuali
     return processed_stations
 
 
+def process_current_weather(data: Dict[str, Any]) -> CurrentWeather:
+    """Process current weather data into a structured format."""
+    current = data.get("current", {})
+    
+    # Map weather code to description
+    weather_code = current.get("weather_code")
+    weather_description = WEATHER_CODES.get(weather_code, "Desconocido") if weather_code is not None else None
+    
+    return CurrentWeather(
+        temperature=current.get("temperature_2m"),
+        apparent_temperature=current.get("apparent_temperature"),
+        relative_humidity=current.get("relative_humidity_2m"),
+        wind_speed=current.get("wind_speed_10m"),
+        wind_direction=current.get("wind_direction_10m"),
+        precipitation=current.get("precipitation"),
+        weather_code=weather_code,
+        weather_description=weather_description,
+        timestamp=current.get("time", datetime.now().isoformat())
+    )
+
+
+def process_weather_forecast(data: Dict[str, Any]) -> List[WeatherForecast]:
+    """Process weather forecast data into a list of structured forecasts."""
+    hourly = data.get("hourly", {})
+    time_entries = hourly.get("time", [])
+    
+    forecasts = []
+    for i, time in enumerate(time_entries):
+        # Check that the index is within range to avoid errors
+        if i >= len(hourly.get("temperature_2m", [])):
+            continue
+            
+        weather_code = hourly.get("weather_code", [])[i] if i < len(hourly.get("weather_code", [])) else None
+        
+        forecasts.append(
+            WeatherForecast(
+                time=time,
+                temperature=hourly.get("temperature_2m", [])[i],
+                apparent_temperature=hourly.get("apparent_temperature", [])[i] if i < len(hourly.get("apparent_temperature", [])) else None,
+                relative_humidity=hourly.get("relative_humidity_2m", [])[i] if i < len(hourly.get("relative_humidity_2m", [])) else None,
+                wind_speed=hourly.get("wind_speed_10m", [])[i] if i < len(hourly.get("wind_speed_10m", [])) else None,
+                wind_direction=hourly.get("wind_direction_10m", [])[i] if i < len(hourly.get("wind_direction_10m", [])) else None,
+                precipitation_probability=hourly.get("precipitation_probability", [])[i] if i < len(hourly.get("precipitation_probability", [])) else None,
+                precipitation=hourly.get("precipitation", [])[i] if i < len(hourly.get("precipitation", [])) else None,
+                weather_code=weather_code,
+                weather_description=WEATHER_CODES.get(weather_code, "Desconocido") if weather_code is not None else None
+            )
+        )
+    
+    return forecasts
+
+
 def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Calculate distance between two points using Haversine formula."""
     # Convert latitude and longitude from degrees to radians
@@ -336,6 +503,45 @@ async def get_processed_air_quality_data() -> List[Dict[str, Any]]:
     records = await fetch_air_quality_data()
     processed_stations = process_air_quality_stations(records)
     return [station.model_dump() for station in processed_stations]
+
+
+@mcp.resource("valencia://weather/current")
+async def get_current_weather_resource() -> Dict[str, Any]:
+    """Get current weather conditions in Valencia."""
+    data = await fetch_current_weather()
+    weather = process_current_weather(data)
+    return weather.model_dump()
+
+
+@mcp.resource("valencia://weather/forecast")
+async def get_weather_forecast_resource() -> Dict[str, Any]:
+    """Get weather forecast for Valencia."""
+    data = await fetch_weather_forecast()
+    forecasts = process_weather_forecast(data)
+    
+    # Group by day for easier access
+    forecast_by_day = {}
+    for forecast in forecasts:
+        day = forecast.time.split("T")[0]
+        if day not in forecast_by_day:
+            forecast_by_day[day] = []
+        forecast_by_day[day].append(forecast.model_dump())
+    
+    return {
+        "location": "Valencia, España",
+        "coordinates": {
+            "latitude": VALENCIA_LATITUDE,
+            "longitude": VALENCIA_LONGITUDE
+        },
+        "forecast_by_day": forecast_by_day,
+        "hourly_forecasts": [f.model_dump() for f in forecasts]
+    }
+
+
+@mcp.resource("valencia://weather/historical/{start_date}/{end_date}")
+async def get_historical_weather_resource(start_date: str, end_date: str) -> Dict[str, Any]:
+    """Get historical weather data for Valencia for the specified period."""
+    return await get_historical_weather(start_date, end_date)
 
 
 # Traffic Tools
@@ -870,6 +1076,215 @@ async def get_air_quality_map() -> Dict[str, Any]:
     return result
 
 
+# Weather Tools
+
+@mcp.tool()
+async def get_current_weather() -> Dict[str, Any]:
+    """
+    Get current weather conditions in Valencia.
+    
+    Returns:
+        Dictionary with current weather information including temperature,
+        humidity, wind speed, and weather description.
+    """
+    data = await fetch_current_weather()
+    weather = process_current_weather(data)
+    return weather.model_dump()
+
+
+@mcp.tool()
+async def get_weather_forecast(days: int = 3) -> Dict[str, Any]:
+    """
+    Get weather forecast for Valencia.
+    
+    Args:
+        days: Number of days to forecast (1-7, default: 3)
+    
+    Returns:
+        Dictionary with hourly weather forecasts for the requested period.
+    """
+    # Validate the range of days
+    days = min(7, max(1, days))
+    
+    data = await fetch_weather_forecast(days)
+    forecasts = process_weather_forecast(data)
+    
+    # Group by day for easier analysis
+    forecast_by_day = {}
+    for forecast in forecasts:
+        day = forecast.time.split("T")[0]
+        if day not in forecast_by_day:
+            forecast_by_day[day] = []
+        forecast_by_day[day].append(forecast.model_dump())
+    
+    return {
+        "generated_at": datetime.now().isoformat(),
+        "location": "Valencia, España",
+        "coordinates": {
+            "latitude": VALENCIA_LATITUDE,
+            "longitude": VALENCIA_LONGITUDE
+        },
+        "days": days,
+        "forecast_by_day": forecast_by_day,
+        "hourly_forecasts": [f.model_dump() for f in forecasts]
+    }
+
+
+@mcp.tool()
+async def get_historical_weather(start_date: str, end_date: str) -> Dict[str, Any]:
+    """
+    Get historical weather data for Valencia.
+    
+    Args:
+        start_date: Start date in YYYY-MM-DD format
+        end_date: End date in YYYY-MM-DD format (must be after start_date)
+    
+    Returns:
+        Historical weather data for the specified period.
+    """
+    # Validate dates
+    try:
+        start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        
+        if end < start:
+            return {"error": "La fecha final debe ser posterior a la fecha inicial"}
+            
+        # Limit the range to avoid very large requests
+        if (end - start).days > 30:
+            return {"error": "El rango de fechas no puede exceder los 30 días"}
+            
+    except ValueError:
+        return {"error": "Formato de fecha inválido. Use YYYY-MM-DD"}
+    
+    data = await fetch_historical_weather(start_date, end_date)
+    
+    # Process historical data into a consistent format
+    hourly = data.get("hourly", {})
+    times = hourly.get("time", [])
+    
+    result = {
+        "generated_at": datetime.now().isoformat(),
+        "location": "Valencia, España",
+        "coordinates": {
+            "latitude": VALENCIA_LATITUDE,
+            "longitude": VALENCIA_LONGITUDE
+        },
+        "start_date": start_date,
+        "end_date": end_date,
+        "data_points": len(times),
+        "hourly_data": []
+    }
+    
+    for i, time in enumerate(times):
+        if i >= len(hourly.get("temperature_2m", [])):
+            continue
+            
+        result["hourly_data"].append({
+            "time": time,
+            "temperature": hourly.get("temperature_2m", [])[i],
+            "relative_humidity": hourly.get("relative_humidity_2m", [])[i] if i < len(hourly.get("relative_humidity_2m", [])) else None,
+            "wind_speed": hourly.get("wind_speed_10m", [])[i] if i < len(hourly.get("wind_speed_10m", [])) else None,
+            "precipitation": hourly.get("precipitation", [])[i] if i < len(hourly.get("precipitation", [])) else None
+        })
+    
+    return result
+
+
+@mcp.tool()
+async def get_daily_weather_summary(day_offset: int = 0) -> Dict[str, Any]:
+    """
+    Get a daily weather summary for Valencia.
+    
+    Args:
+        day_offset: Day offset (0=today, 1=tomorrow, etc., maximum 6)
+    
+    Returns:
+        Daily weather summary with min/max/avg values.
+    """
+    # Validate the day offset
+    day_offset = min(6, max(0, day_offset))
+    
+    # Calculate the date
+    target_date = datetime.now().date() + timedelta(days=day_offset)
+    date_str = target_date.isoformat()
+    
+    # Get forecast
+    data = await fetch_weather_forecast(day_offset + 1)
+    forecasts = process_weather_forecast(data)
+    
+    # Filter forecasts for the target day
+    day_forecasts = [f for f in forecasts if f.time.startswith(date_str)]
+    
+    if not day_forecasts:
+        return {
+            "error": f"No se encontraron datos para la fecha {date_str}"
+        }
+    
+    # Calculate min/max/avg values
+    temperatures = [f.temperature for f in day_forecasts if f.temperature is not None]
+    humidities = [f.relative_humidity for f in day_forecasts if f.relative_humidity is not None]
+    wind_speeds = [f.wind_speed for f in day_forecasts if f.wind_speed is not None]
+    
+    # Check if weather codes are available
+    weather_codes = [f.weather_code for f in day_forecasts if f.weather_code is not None]
+    
+    # Find the most common code (mode)
+    most_common_code = None
+    if weather_codes:
+        most_common_code = Counter(weather_codes).most_common(1)[0][0]
+    
+    # Check if precipitation probabilities are available
+    precip_probs = [f.precipitation_probability for f in day_forecasts if f.precipitation_probability is not None]
+    max_precip_prob = max(precip_probs) if precip_probs else None
+    
+    # Get day name in Spanish
+    day_name = target_date.strftime("%A")
+    if day_name == "Monday":
+        day_name = "Lunes"
+    elif day_name == "Tuesday":
+        day_name = "Martes"
+    elif day_name == "Wednesday":
+        day_name = "Miércoles"
+    elif day_name == "Thursday":
+        day_name = "Jueves"
+    elif day_name == "Friday":
+        day_name = "Viernes"
+    elif day_name == "Saturday":
+        day_name = "Sábado"
+    elif day_name == "Sunday":
+        day_name = "Domingo"
+    
+    return {
+        "date": date_str,
+        "day_name": day_name,
+        "day_type": "Hoy" if day_offset == 0 else "Mañana" if day_offset == 1 else f"Dentro de {day_offset} días",
+        "temperature": {
+            "min": min(temperatures) if temperatures else None,
+            "max": max(temperatures) if temperatures else None,
+            "avg": sum(temperatures) / len(temperatures) if temperatures else None
+        },
+        "humidity": {
+            "min": min(humidities) if humidities else None,
+            "max": max(humidities) if humidities else None,
+            "avg": sum(humidities) / len(humidities) if humidities else None
+        },
+        "wind_speed": {
+            "min": min(wind_speeds) if wind_speeds else None,
+            "max": max(wind_speeds) if wind_speeds else None,
+            "avg": sum(wind_speeds) / len(wind_speeds) if wind_speeds else None
+        },
+        "precipitation": {
+            "max_probability": max_precip_prob
+        },
+        "predominant_weather": {
+            "code": most_common_code,
+            "description": WEATHER_CODES.get(most_common_code, "Desconocido") if most_common_code is not None else None
+        },
+        "hourly_data": [f.model_dump() for f in day_forecasts]
+    }
+
+
 # Prompts
 
 @mcp.prompt("traffic_report")
@@ -976,6 +1391,30 @@ def urban_mobility_report_prompt() -> str:
    - Time-saving and health-conscious strategies for urban travel
 
 Use the get_congestion_summary tool for traffic data, get_bike_station_status tool for bike information, and get_air_quality_summary for environmental data.
+"""
+
+
+@mcp.prompt("weather_forecast")
+def weather_forecast_prompt(days: int = 3) -> str:
+    """Create a prompt for analyzing weather forecast in Valencia."""
+    return f"""Por favor, analiza el pronóstico del tiempo en Valencia para los próximos {days} días:
+
+1. Condiciones generales
+   - Patrones de temperatura
+   - Expectativas de precipitación
+   - Condiciones de viento
+   
+2. Resumen día a día
+   - Temperatura mínima y máxima
+   - Probabilidad de lluvia
+   - Recomendaciones generales
+
+3. Aspectos destacados
+   - Días con mejor clima
+   - Alertas de condiciones adversas (si las hay)
+   - Tendencias generales
+
+Utiliza la herramienta get_weather_forecast con days={days} para obtener los datos del pronóstico.
 """
 
 
