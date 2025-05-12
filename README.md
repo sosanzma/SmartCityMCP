@@ -39,7 +39,7 @@ This shared conversation demonstrates how Claude can access and analyze real-tim
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/SmartCityMCP.git
+git clone https://github.com/sosanzma/SmartCityMCP.git
 cd SmartCityMCP
 
 # Install dependencies
